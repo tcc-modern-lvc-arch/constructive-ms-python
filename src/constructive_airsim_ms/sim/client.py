@@ -89,5 +89,23 @@ class DroneClient:
             vehicle_name=settings.drone_id,
         )
 
+    def get_scene_image(self) -> bytes:
+        """Capture front_center Scene image, return PNG-compressed bytes."""
+        responses = self._client.simGetImages(
+            [airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)],
+            vehicle_name=settings.drone_id,
+        )
+        if not responses or not responses[0].image_data_uint8:
+            return b""
+        return bytes(responses[0].image_data_uint8)
+
+    def move_to_position(self, x: float, y: float, z: float, velocity: float) -> None:
+        """Non-blocking: AirSim position controller flies to NED (x, y, z) at given velocity.
+        z is AirSim NED convention (negative = up)."""
+        self._client.moveToPositionAsync(
+            x, y, z, velocity,
+            vehicle_name=settings.drone_id,
+        )
+
     def hover(self) -> None:
         self._client.hoverAsync(vehicle_name=settings.drone_id)

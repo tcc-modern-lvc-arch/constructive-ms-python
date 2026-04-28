@@ -1,6 +1,7 @@
 """FastAPI control endpoints."""
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -10,7 +11,7 @@ from constructive_airsim_ms.config import DroneBehavior, settings
 from constructive_airsim_ms.sim.coordinates import ned_to_wgs84
 
 if TYPE_CHECKING:
-    from constructive_airsim_ms.main import AppState
+    from constructive_airsim_ms.main import AppState, BusMission
 
 app = FastAPI(title="Constructive AirSim MS", version="0.2.0")
 
@@ -42,12 +43,14 @@ async def health():
 async def status():
     s = _require_state()
     return {
-        "connected":   s.connected,
-        "running":     s.running,
-        "behavior":    s.queue.behavior,
-        "queue_size":  s.queue.size(),
-        "crash_count": s.crash_count,
-        "llm_ready":   s.queue.llm_ready,
+        "connected":        s.connected,
+        "running":          s.running,
+        "behavior":         s.queue.behavior,
+        "queue_size":       s.queue.size(),
+        "crash_count":      s.crash_count,
+        "llm_ready":        s.queue.llm_ready,
+        "bus_queue_depth":  len(s.bus_queue),
+        "bus_active":       bool(s.bus_queue),
     }
 
 
@@ -115,3 +118,33 @@ async def reset():
     s = _require_state()
     s.reset_requested = True
     return {"status": "reset_queued"}
+
+
+class BusApproachRequest(BaseModel):
+    bus_id:    str = "BUS-001"
+    stop_id:   str = "caio_prado_cb"
+    stop_name: str = "Caio Prado C/B"
+
+
+@app.post("/simulate-bus-approach")
+async def simulate_bus_approach(body: BusApproachRequest):
+    """Manually trigger a bus-stop photo mission. Use for testing without live-ms-java."""
+    import time
+    s = _require_state()
+    if len(s.bus_queue) >= settings.bus_queue_max:
+        raise HTTPException(429, f"Bus queue full ({settings.bus_queue_max} pending)")
+
+    from constructive_airsim_ms.main import BusMission
+    mission_id = str(uuid.uuid4())
+    s.bus_queue.append(BusMission(
+        bus_id=body.bus_id,
+        stop_id=body.stop_id,
+        mission_id=mission_id,
+        expires_at=time.monotonic() + settings.bus_mission_ttl_s,
+    ))
+    return {
+        "status": "mission_queued",
+        "mission_id": mission_id,
+        "stop": body.stop_name,
+        "queue_depth": len(s.bus_queue),
+    }

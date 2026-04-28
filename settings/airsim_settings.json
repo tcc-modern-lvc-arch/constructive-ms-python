@@ -18,6 +18,12 @@
         "front_center": {
           "CaptureSettings": [
             {
+              "ImageType": 0,
+              "Width": 640,
+              "Height": 480,
+              "FOV_Degrees": 90
+            },
+            {
               "ImageType": 2,
               "Width": 160,
               "Height": 120,

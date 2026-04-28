@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from dataclasses import dataclass
 
 import airsim
@@ -97,18 +98,26 @@ class LLMPolicy:
         )
         speed = (vel.x_val**2 + vel.y_val**2 + vel.z_val**2) ** 0.5
 
+        dist_2d = (pos.x_val**2 + pos.y_val**2) ** 0.5
+        bearing_to_origin = (math.degrees(math.atan2(-pos.y_val, -pos.x_val)) + 360) % 360
+
         user_msg = json.dumps({
-            "position_wgs84":    {"lat": round(lat, 6), "lon": round(lon, 6), "alt_m": round(alt, 1)},
-            "velocity_ms":       {"vx": round(vel.x_val, 2), "vy": round(vel.y_val, 2), "vz": round(vel.z_val, 2)},
-            "speed_ms":          round(speed, 2),
-            "nearby_obstacles":  obstacles,
-            "moves_needed":      n_moves,
+            "position_wgs84":      {"lat": round(lat, 6), "lon": round(lon, 6), "alt_m": round(alt, 1)},
+            "ned_position":        {"x_m": round(pos.x_val, 1), "y_m": round(pos.y_val, 1), "z_m": round(pos.z_val, 1)},
+            "distance_from_origin_m": round(dist_2d, 1),
+            "bearing_to_origin_deg":  round(bearing_to_origin, 1),
+            "patrol_radius_m":     settings.max_patrol_radius_m,
+            "velocity_ms":         {"vx": round(vel.x_val, 2), "vy": round(vel.y_val, 2), "vz": round(vel.z_val, 2)},
+            "speed_ms":            round(speed, 2),
+            "nearby_obstacles":    obstacles,
+            "moves_needed":        n_moves,
         })
 
         sys_prompt = plan_system_prompt(
             behavior, n_moves,
             settings.max_speed_ms, settings.min_altitude_m, settings.max_altitude_m,
             default_plan_summary,
+            settings.max_patrol_radius_m,
         )
 
         client, model = self._client_and_model()

@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package events;
+
+// This service is IMPLEMENTED by constructive-airsim-ms (it listens on grpc_server_port).
+// live-ms-java is the client that calls NotifyBusApproach.
+service DroneController {
+  rpc NotifyBusApproach(BusApproachEvent) returns (BusApproachAck);
+}
+
+// This service is IMPLEMENTED by live-ms-java EventHub.
+// constructive-airsim-ms calls PublishBusPhoto after capturing the scene image.
+service BusEventHub {
+  rpc PublishBusPhoto(BusPhotoEvent) returns (BusPhotoAck);
+}
+
+message BusApproachEvent {
+  string bus_id       = 1;
+  int64  timestamp_ns = 2;  // nanoseconds since epoch
+  double latitude     = 3;  // WGS84 bus current position
+  double longitude    = 4;
+  string stop_id      = 5;  // e.g. "caio_prado_cb"
+  string stop_name    = 6;  // e.g. "Caio Prado C/B"
+}
+
+message BusApproachAck {
+  bool   received   = 1;
+  string mission_id = 2;  // UUID assigned to this drone mission
+}
+
+message BusPhotoEvent {
+  string drone_id     = 1;
+  string bus_id       = 2;
+  string mission_id   = 3;
+  int64  timestamp_ns = 4;  // nanoseconds since epoch
+  double latitude     = 5;  // drone position when photo was taken (WGS84)
+  double longitude    = 6;
+  double altitude_m   = 7;
+  string stop_id      = 8;
+  bytes  image_png    = 9;  // PNG-encoded 640x480 front_center Scene image
+}
+
+message BusPhotoAck {
+  bool   received = 1;
+  string event_id = 2;
+}

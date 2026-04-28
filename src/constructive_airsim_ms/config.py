@@ -66,12 +66,27 @@ class Settings:
     behavior_stickiness: float = 0.6  # P(keep current behavior on replan); 1-this = random switch
 
     # ── Agent constraints ─────────────────────────────────────────────────────
-    cruise_altitude_m:   float = 50.0
-    llm_timeout_seconds: float = 120.0
-    max_speed_ms:        float = 12.0
-    min_altitude_m:      float = 10.0
-    max_altitude_m:      float = 150.0
-    reset_delay_seconds: float = 3.0
+    cruise_altitude_m:    float = 50.0
+    llm_timeout_seconds:  float = 120.0
+    max_speed_ms:         float = 12.0
+    min_altitude_m:       float = 10.0
+    max_altitude_m:       float = 80.0   # prompt guidance AND hard ceiling
+    reset_delay_seconds:  float = 3.0
+
+    # ── Spatial guardrail (code-enforced, overrides LLM) ─────────────────────
+    max_patrol_radius_m:  float = 400.0  # max 2D distance from NED origin
+    max_altitude_hard_m:  float = 80.0   # hard ceiling — matches max_altitude_m
+
+    # ── Bus stop "Caio Prado C/B" ─────────────────────────────────────────────
+    bus_stop_lat:    float = -23.5479  # adjust once you verify AirSimNH map coords
+    bus_stop_lon:    float = -46.6494
+    bus_stop_alt:    float = 780.0
+    bus_hover_alt_m:  float = 30.0    # AGL when hovering for photo
+    bus_mission_ttl_s: float = 90.0  # seconds before a queued mission is considered stale
+    bus_queue_max:    int   = 3      # max pending missions; new arrivals rejected when full
+
+    # ── gRPC server (this service listens here for incoming events) ───────────
+    grpc_server_port: int = 50052
 
     # ── Service ───────────────────────────────────────────────────────────────
     api_port:  int  = 8081
