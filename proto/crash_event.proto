@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package events;
+
+service EventHub {
+  rpc PublishCrash(CrashEvent) returns (CrashAck);
+}
+
+message CrashEvent {
+  string drone_id       = 1;
+  int64  timestamp_ns   = 2;  // nanoseconds since epoch
+  double latitude       = 3;  // WGS84
+  double longitude      = 4;
+  double altitude_m     = 5;
+  double speed_ms       = 6;  // impact speed
+  string mode           = 7;  // "safe" | "chaos"
+  string collision_object = 8;
+  float  severity       = 9;  // 0.0–1.0, derived from impact velocity
+}
+
+message CrashAck {
+  bool   received = 1;
+  string event_id = 2;
+}

@@ -1,0 +1,17 @@
+.env
+.idea/
+.claude/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+src/constructive_airsim_ms/generated/
+*.pfm
+*.png
+dataset/
+models/
+
+# AirSim precompiled binaries (~10 GB) — download separately, never commit
+AirSim/
