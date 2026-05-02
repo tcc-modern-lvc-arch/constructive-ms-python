@@ -21,12 +21,16 @@ try:
         bus_event_pb2_grpc,
     )
     _STUBS_AVAILABLE = True
+    _ServicerBase = bus_event_pb2_grpc.DroneControllerServicer
 except ImportError:
     _STUBS_AVAILABLE = False
+    bus_event_pb2 = None  # type: ignore[assignment]
+    bus_event_pb2_grpc = None  # type: ignore[assignment]
+    _ServicerBase = object
     log.warning("bus_grpc_stubs_missing", hint="Run: python scripts/gen_proto.py")
 
 
-class DroneControllerServicer(bus_event_pb2_grpc.DroneControllerServicer):
+class DroneControllerServicer(_ServicerBase):
     def __init__(self, app_state: AppState) -> None:
         self._state = app_state
 

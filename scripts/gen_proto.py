@@ -19,4 +19,14 @@ subprocess.run(
     ],
     check=True,
 )
+
+# grpc_tools emits bare `import X_pb2` which breaks inside a package; fix to relative.
+import re
+for grpc_file in OUT.glob("*_pb2_grpc.py"):
+    text = grpc_file.read_text()
+    fixed = re.sub(r"^import (\w+_pb2) as", r"from . import \1 as", text, flags=re.MULTILINE)
+    if fixed != text:
+        grpc_file.write_text(fixed)
+        print(f"  patched imports: {grpc_file.name}")
+
 print(f"Stubs written to {OUT}: {[p.name for p in protos]}")

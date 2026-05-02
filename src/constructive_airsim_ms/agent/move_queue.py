@@ -75,6 +75,28 @@ class MoveQueue:
             except _queue.Empty:
                 break
 
+    def drain(self) -> list[DroneMove]:
+        """Remove and return all queued moves."""
+        moves: list[DroneMove] = []
+        while not self._q.empty():
+            try:
+                moves.append(self._q.get_nowait())
+            except _queue.Empty:
+                break
+        return moves
+
+    def restore(self, moves: list[DroneMove]) -> None:
+        """Re-enqueue previously drained moves at the front of the queue."""
+        tmp: _queue.Queue[DroneMove] = _queue.Queue()
+        for m in moves:
+            tmp.put(m)
+        while not self._q.empty():
+            try:
+                tmp.put(self._q.get_nowait())
+            except _queue.Empty:
+                break
+        self._q = tmp
+
     def size(self) -> int:
         return self._q.qsize()
 

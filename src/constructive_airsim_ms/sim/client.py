@@ -26,7 +26,7 @@ class DroneClient:
         self._client = airsim.MultirotorClient(
             ip=settings.airsim_host,
             port=settings.airsim_port,
-            timeout_value=10,
+            timeout_value=300,
         )
 
     def connect(self, max_retries: int = 30, retry_delay: float = 3.0) -> None:

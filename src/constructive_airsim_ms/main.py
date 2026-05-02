@@ -27,6 +27,7 @@ from constructive_airsim_ms.agent.move_queue import MoveQueue
 from constructive_airsim_ms.agent.route import traced_route
 from constructive_airsim_ms.api.rest import app, attach_state
 from constructive_airsim_ms.config import settings
+from constructive_airsim_ms.publishers.area_publisher import AreaPublisher
 from constructive_airsim_ms.publishers.bus_photo_publisher import BusPhotoPublisher
 from constructive_airsim_ms.publishers.crash_publisher import CrashPublisher
 from constructive_airsim_ms.sim.client import DroneClient
@@ -50,12 +51,17 @@ BUS_ARRIVAL_RADIUS_M = 15.0
 
 @dataclass
 class BusMission:
-    bus_id:      str
-    stop_id:     str
-    mission_id:  str
-    expires_at:  float            # monotonic deadline — skip if past this
-    phase:       str  = "going"   # going → arrived → done
-    nav_issued:  bool = False
+    bus_id:        str
+    stop_id:       str
+    mission_id:    str
+    expires_at:    float            # monotonic deadline — skip if past this
+    phase:         str  = "going"   # going → arrived → returning → done
+    nav_issued:    bool = False
+    saved_moves:   list = field(default_factory=list)
+    return_x:      float = 0.0
+    return_y:      float = 0.0
+    return_z:      float = 0.0
+    return_issued: bool  = False
 
 
 @dataclass
@@ -63,6 +69,7 @@ class AppState:
     queue:           MoveQueue
     publisher:       CrashPublisher
     bus_publisher:   BusPhotoPublisher
+    area_publisher:  AreaPublisher
     asyncio_loop:    asyncio.AbstractEventLoop
     connected:       bool                          = False
     running:         bool                          = False
@@ -71,6 +78,7 @@ class AppState:
     crash_count:     int                           = 0
     last_state:      airsim.MultirotorState | None = None
     bus_queue:       deque[BusMission]             = field(default_factory=deque)
+    inside_area:     bool                          = True   # assume start inside Mackenzie area
 
 
 class AirSimControlThread(threading.Thread):
@@ -147,6 +155,20 @@ class AirSimControlThread(threading.Thread):
         client.takeoff()
         self._state.resetting = False
 
+    def _publish_area_transition(
+        self, ms_state: airsim.MultirotorState, transition: str, dist_2d: float
+    ) -> None:
+        pos = ms_state.kinematics_estimated.position
+        lat, lon, alt = ned_to_wgs84(
+            pos.x_val, pos.y_val, pos.z_val,
+            settings.origin_lat, settings.origin_lon, settings.origin_alt,
+        )
+        log.info("area_transition", transition=transition, dist_m=round(dist_2d, 1))
+        asyncio.run_coroutine_threadsafe(
+            self._state.area_publisher.publish(transition, lat, lon, alt, dist_2d),
+            self._state.asyncio_loop,
+        )
+
     def _print_telemetry(self, ms_state: airsim.MultirotorState) -> None:
         pos   = ms_state.kinematics_estimated.position
         vel   = ms_state.kinematics_estimated.linear_velocity
@@ -187,8 +209,11 @@ class AirSimControlThread(threading.Thread):
 
         if mission.phase == "going":
             if not mission.nav_issued:
-                # Clear LLM queue — drone navigates under AirSim position controller.
-                self._state.queue.clear()
+                # Save position + remaining moves before taking control.
+                mission.return_x = pos.x_val
+                mission.return_y = pos.y_val
+                mission.return_z = pos.z_val
+                mission.saved_moves = self._state.queue.drain()
                 client.move_to_position(
                     self._bus_ned_x,
                     self._bus_ned_y,
@@ -201,6 +226,7 @@ class AirSimControlThread(threading.Thread):
                     mission_id=mission.mission_id,
                     pending=len(self._state.bus_queue) - 1,
                     target_ned=(self._bus_ned_x, self._bus_ned_y, self._bus_ned_z),
+                    saved_moves=len(mission.saved_moves),
                 )
 
             dist = math.sqrt(
@@ -237,7 +263,38 @@ class AirSimControlThread(threading.Thread):
                 image_bytes=len(image_png),
                 remaining_queue=len(self._state.bus_queue) - 1,
             )
-            self._state.bus_queue.popleft()
+            mission.phase = "returning"
+
+        elif mission.phase == "returning":
+            if not mission.return_issued:
+                client.move_to_position(
+                    mission.return_x,
+                    mission.return_y,
+                    mission.return_z,
+                    velocity=6.0,
+                )
+                mission.return_issued = True
+                log.info(
+                    "bus_mission_returning",
+                    mission_id=mission.mission_id,
+                    return_ned=(mission.return_x, mission.return_y, mission.return_z),
+                    saved_moves=len(mission.saved_moves),
+                )
+
+            dist = math.sqrt(
+                (pos.x_val - mission.return_x) ** 2 +
+                (pos.y_val - mission.return_y) ** 2
+            )
+            if dist < BUS_ARRIVAL_RADIUS_M:
+                stale = self._state.queue.drain()  # discard any moves queued during mission
+                self._state.queue.restore(mission.saved_moves)
+                self._state.bus_queue.popleft()
+                log.info(
+                    "bus_mission_done",
+                    mission_id=mission.mission_id,
+                    moves_restored=len(mission.saved_moves),
+                    stale_discarded=len(stale),
+                )
 
     # ── main control loop ─────────────────────────────────────────────────────
 
@@ -247,9 +304,11 @@ class AirSimControlThread(threading.Thread):
         COLLISION_GRACE_S   = 5.0
         OBSTACLE_EVERY_TICK = 5
         ignore_collision_until = time.monotonic() + COLLISION_GRACE_S
-        obstacles  = []
-        tick       = 0
+        obstacles         = []
+        tick              = 0
         move_active_until = 0.0
+        above_alt_limit   = False   # for guardrail log dedup
+        above_rad_limit   = False   # for guardrail log dedup
 
         while self._state.running:
             t0 = time.monotonic()
@@ -278,6 +337,21 @@ class AirSimControlThread(threading.Thread):
                 if tick % OBSTACLE_EVERY_TICK == 0:
                     obstacles = get_nearby_obstacles_sync(client)
 
+                # ── Position metrics (shared by area check, guardrail, and normal op) ─
+                now     = time.monotonic()
+                pos     = ms_state.kinematics_estimated.position
+                alt_agl = -pos.z_val                              # NED z negative = up
+                dist_2d = math.sqrt(pos.x_val**2 + pos.y_val**2)
+
+                # ── Mackenzie area enter/exit (runs every tick, including bus missions) ─
+                area_r = settings.mackenzie_area_radius_m
+                if self._state.inside_area and dist_2d > area_r + 5.0:
+                    self._publish_area_transition(ms_state, "exit", dist_2d)
+                    self._state.inside_area = False
+                elif not self._state.inside_area and dist_2d < area_r - 5.0:
+                    self._publish_area_transition(ms_state, "enter", dist_2d)
+                    self._state.inside_area = True
+
                 # ── Bus mission (highest priority — takes full control) ────────
                 if self._state.bus_queue:
                     self._handle_bus_mission(client, ms_state)
@@ -291,22 +365,20 @@ class AirSimControlThread(threading.Thread):
                 self._state.queue.maybe_replan(ms_state, obstacles)
 
                 # ── Spatial guardrail (overrides LLM queue when out of bounds) ─
-                now    = time.monotonic()
-                pos    = ms_state.kinematics_estimated.position
-                alt_agl = -pos.z_val                                    # NED z negative = up
-                dist_2d = math.sqrt(pos.x_val**2 + pos.y_val**2)
-
                 if alt_agl > settings.max_altitude_hard_m:
-                    # Emergency descent — drone went too high
-                    if now >= move_active_until:
+                    if not above_alt_limit:
                         log.warning("guardrail_altitude", alt_agl=round(alt_agl, 1))
-                        client.move_by_velocity(0.0, 0.0, -4.0, 2.0)
-                        move_active_until = now + 2.0
+                    above_alt_limit = True
+                    above_rad_limit = False
+                    client.move_by_velocity(0.0, 0.0, -4.0, 1.0)
+                    move_active_until = now + 1.0
 
                 elif dist_2d > settings.max_patrol_radius_m:
-                    # Out of patrol area — steer back toward origin
-                    if now >= move_active_until:
+                    if not above_rad_limit:
                         log.warning("guardrail_radius", dist_2d=round(dist_2d, 1))
+                    above_rad_limit = True
+                    above_alt_limit = False
+                    if now >= move_active_until:
                         spd = min(settings.max_speed_ms, 8.0)
                         nx  = (-pos.x_val / dist_2d) * spd
                         ny  = (-pos.y_val / dist_2d) * spd
@@ -314,7 +386,8 @@ class AirSimControlThread(threading.Thread):
                         move_active_until = now + 2.0
 
                 else:
-                    # Normal operation — pop from LLM queue
+                    above_alt_limit = False
+                    above_rad_limit = False
                     if now >= move_active_until:
                         move = self._state.queue.pop()
                         if move:
@@ -339,15 +412,17 @@ class AirSimControlThread(threading.Thread):
 async def main() -> None:
     asyncio_loop = asyncio.get_event_loop()
 
-    policy        = LLMPolicy()
-    publisher     = CrashPublisher()
-    bus_publisher = BusPhotoPublisher()
-    queue         = MoveQueue(policy, asyncio_loop)
+    policy         = LLMPolicy()
+    publisher      = CrashPublisher()
+    bus_publisher  = BusPhotoPublisher()
+    area_publisher = AreaPublisher()
+    queue          = MoveQueue(policy, asyncio_loop)
 
     state = AppState(
         queue=queue,
         publisher=publisher,
         bus_publisher=bus_publisher,
+        area_publisher=area_publisher,
         asyncio_loop=asyncio_loop,
     )
     attach_state(state)
@@ -365,6 +440,7 @@ async def main() -> None:
     state.running = False
     publisher.close()
     bus_publisher.close()
+    area_publisher.close()
 
 
 if __name__ == "__main__":

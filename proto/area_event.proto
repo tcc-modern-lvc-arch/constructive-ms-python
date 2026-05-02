@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package events;
+
+// constructive-airsim-ms publishes when the drone crosses the Mackenzie area boundary.
+service AreaEventHub {
+  rpc PublishAreaTransition(AreaTransitionEvent) returns (AreaTransitionAck);
+}
+
+message AreaTransitionEvent {
+  string drone_id          = 1;
+  int64  timestamp_ns      = 2;  // nanoseconds since epoch
+  double latitude          = 3;  // WGS84
+  double longitude         = 4;
+  double altitude_m        = 5;
+  string area_id           = 6;  // e.g. "mackenzie_higienopolis"
+  string transition        = 7;  // "enter" | "exit"
+  double dist_from_origin_m = 8;
+}
+
+message AreaTransitionAck {
+  bool   received = 1;
+  string event_id = 2;
+}

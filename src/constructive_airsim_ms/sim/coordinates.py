@@ -8,7 +8,7 @@ def ned_to_wgs84(
 ) -> tuple[float, float, float]:
     """AirSim NED (x=North, y=East, z=Down) → (lat, lon, alt_m)."""
     lat, lon, alt = pymap3d.ned2geodetic(
-        x_m, y_m, -z_m,          # pymap3d uses alt=up, AirSim z=down
+        x_m, y_m, z_m,           # both AirSim and pymap3d use z/d = positive-down
         origin_lat, origin_lon, origin_alt,
     )
     return float(lat), float(lon), float(alt)
@@ -23,4 +23,4 @@ def wgs84_to_ned(
         lat, lon, alt,
         origin_lat, origin_lon, origin_alt,
     )
-    return float(n), float(e), float(-d)
+    return float(n), float(e), float(d)
