@@ -1,22 +1,27 @@
-"""System prompts for each drone behavior, injecting the default plan as context."""
+"""System prompts for each drone behavior, injecting patrol zone and flight context."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from constructive_airsim_ms.config import DroneBehavior
+
+if TYPE_CHECKING:
+    from constructive_airsim_ms.models import PatrolZone
 
 _PATROL = """\
 You are an autonomous drone pilot conducting a systematic patrol over São Paulo, Brazil.
-Area: above Mackenzie Higienópolis campus and surrounding city blocks.
+Area: above {zone_name} and surrounding city blocks.
 
 SPATIAL CONTEXT (provided in user message):
-- ned_position: your exact NED offset in metres from campus origin (x=North, y=East, z=Down)
-- distance_from_origin_m: 2-D distance from origin
-- patrol_radius_m: hard boundary — DO NOT exceed this. A code guardrail will override you if you do.
-- bearing_to_origin_deg: compass heading back to campus origin
+- ned_position: your exact NED offset in metres from origin (x=North, y=East, z=Down)
+- patrol_zone: active boundary — dist_from_centroid_m, bearing_to_centroid_deg, and geometry
 
 Mission: Execute a structured grid patrol — methodical back-and-forth sweeps covering the area systematically.
 Rules:
 - Fly parallel legs spaced ~50 m apart, alternating headings to cover a grid.
 - Maintain altitude between {min_alt}m and {max_alt}m AGL.
 - Maximum speed: {max_speed} m/s. Smooth turns only.
-- BOUNDARY: stay within {patrol_radius}m of origin. If distance_from_origin_m > {boundary_warn}m, plan a return arc NOW.
+- {zone_boundary_rule}
 - Avoid all obstacles. Use nearby_obstacles to steer clear.
 
 The drone previously flew: {default_plan_summary}
@@ -46,6 +51,24 @@ _TEMPLATES: dict[DroneBehavior, str] = {
 }
 
 
+def _zone_boundary_rule(zone: "PatrolZone") -> str:
+    warn = int(zone.radius_m * 0.80)
+    if zone.area_type == "POLYGON" and zone.wgs84_vertices:
+        pts = " → ".join(
+            f"({v['lat']:.5f},{v['lon']:.5f})" for v in zone.wgs84_vertices
+        )
+        return (
+            f"BOUNDARY: stay inside polygon '{zone.name}' "
+            f"[{pts}]. "
+            f"If dist_from_centroid_m > {warn}m, plan a return arc NOW."
+        )
+    return (
+        f"BOUNDARY: stay within {zone.radius_m:.0f}m of patrol centre "
+        f"({zone.center_lat:.5f},{zone.center_lon:.5f}) '{zone.name}'. "
+        f"If dist_from_centroid_m > {warn}m, plan a return arc NOW."
+    )
+
+
 def plan_system_prompt(
     behavior:             DroneBehavior,
     n_moves:              int,
@@ -53,16 +76,14 @@ def plan_system_prompt(
     min_alt:              float,
     max_alt:              float,
     default_plan_summary: str,
-    patrol_radius:        float,
+    patrol_zone:          "PatrolZone",
 ) -> str:
-    # Warn the LLM to turn back when at 80% of the hard boundary.
-    boundary_warn = round(patrol_radius * 0.80)
     return _TEMPLATES[behavior].format(
         n=n_moves,
         max_speed=max_speed,
         min_alt=min_alt,
         max_alt=max_alt,
         default_plan_summary=default_plan_summary,
-        patrol_radius=int(patrol_radius),
-        boundary_warn=boundary_warn,
+        zone_name=patrol_zone.name,
+        zone_boundary_rule=_zone_boundary_rule(patrol_zone),
     )

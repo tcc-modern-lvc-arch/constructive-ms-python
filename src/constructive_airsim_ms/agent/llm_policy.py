@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 
 from constructive_airsim_ms.agent.prompts import plan_system_prompt
 from constructive_airsim_ms.config import DroneBehavior, settings
+from constructive_airsim_ms.models import PatrolZone, default_patrol_zone
 from constructive_airsim_ms.sim.coordinates import ned_to_wgs84
 
 log = structlog.get_logger()
@@ -88,8 +89,11 @@ class LLMPolicy:
         obstacles:            list[dict],
         default_plan_summary: str,
         n_moves:              int,
+        patrol_zone:          PatrolZone | None = None,
     ) -> FlightPlan:
         """Generate a full flight plan for the given behavior. Returns empty plan on failure."""
+        zone = patrol_zone or default_patrol_zone()
+
         pos = state.kinematics_estimated.position
         vel = state.kinematics_estimated.linear_velocity
         lat, lon, alt = ned_to_wgs84(
@@ -98,26 +102,39 @@ class LLMPolicy:
         )
         speed = (vel.x_val**2 + vel.y_val**2 + vel.z_val**2) ** 0.5
 
-        dist_2d = (pos.x_val**2 + pos.y_val**2) ** 0.5
-        bearing_to_origin = (math.degrees(math.atan2(-pos.y_val, -pos.x_val)) + 360) % 360
+        dx = pos.x_val - zone.ned_centroid_x
+        dy = pos.y_val - zone.ned_centroid_y
+        dist_from_centroid  = math.sqrt(dx**2 + dy**2)
+        bearing_to_centroid = (math.degrees(math.atan2(-dy, -dx)) + 360) % 360
+
+        zone_ctx: dict = {
+            "name":                   zone.name,
+            "type":                   zone.area_type,
+            "dist_from_centroid_m":   round(dist_from_centroid, 1),
+            "bearing_to_centroid_deg": round(bearing_to_centroid, 1),
+        }
+        if zone.area_type == "POLYGON" and zone.wgs84_vertices:
+            zone_ctx["boundary_wgs84"]   = zone.wgs84_vertices
+            zone_ctx["bounding_radius_m"] = round(zone.radius_m)
+        else:
+            zone_ctx["center_wgs84"] = {"lat": zone.center_lat, "lon": zone.center_lon}
+            zone_ctx["radius_m"]     = round(zone.radius_m)
 
         user_msg = json.dumps({
-            "position_wgs84":      {"lat": round(lat, 6), "lon": round(lon, 6), "alt_m": round(alt, 1)},
-            "ned_position":        {"x_m": round(pos.x_val, 1), "y_m": round(pos.y_val, 1), "z_m": round(pos.z_val, 1)},
-            "distance_from_origin_m": round(dist_2d, 1),
-            "bearing_to_origin_deg":  round(bearing_to_origin, 1),
-            "patrol_radius_m":     settings.max_patrol_radius_m,
-            "velocity_ms":         {"vx": round(vel.x_val, 2), "vy": round(vel.y_val, 2), "vz": round(vel.z_val, 2)},
-            "speed_ms":            round(speed, 2),
-            "nearby_obstacles":    obstacles,
-            "moves_needed":        n_moves,
+            "position_wgs84": {"lat": round(lat, 6), "lon": round(lon, 6), "alt_m": round(alt, 1)},
+            "ned_position":   {"x_m": round(pos.x_val, 1), "y_m": round(pos.y_val, 1), "z_m": round(pos.z_val, 1)},
+            "patrol_zone":    zone_ctx,
+            "velocity_ms":    {"vx": round(vel.x_val, 2), "vy": round(vel.y_val, 2), "vz": round(vel.z_val, 2)},
+            "speed_ms":       round(speed, 2),
+            "nearby_obstacles": obstacles,
+            "moves_needed":   n_moves,
         })
 
         sys_prompt = plan_system_prompt(
             behavior, n_moves,
             settings.max_speed_ms, settings.min_altitude_m, settings.max_altitude_m,
             default_plan_summary,
-            settings.max_patrol_radius_m,
+            zone,
         )
 
         client, model = self._client_and_model()

@@ -13,6 +13,7 @@ import structlog
 from constructive_airsim_ms.agent.llm_policy import DroneMove, FlightPlan
 from constructive_airsim_ms.agent.route import DEFAULT_PLAN_SUMMARY, traced_route
 from constructive_airsim_ms.config import DroneBehavior, settings
+from constructive_airsim_ms.models import PatrolZone, default_patrol_zone
 
 if TYPE_CHECKING:
     from constructive_airsim_ms.agent.llm_policy import LLMPolicy
@@ -36,13 +37,14 @@ def _pick_behavior(
 
 class MoveQueue:
     def __init__(self, policy: LLMPolicy, asyncio_loop: asyncio.AbstractEventLoop) -> None:
-        self._policy     = policy
-        self._loop       = asyncio_loop
-        self._q:         _queue.Queue[DroneMove] = _queue.Queue()
-        self._behavior   = _pick_behavior(settings.initial_behavior)
-        self._replanning = threading.Event()
-        self._llm_ready  = False
-        self._override:  DroneBehavior | None = None  # set by REST /behavior
+        self._policy      = policy
+        self._loop        = asyncio_loop
+        self._q:          _queue.Queue[DroneMove] = _queue.Queue()
+        self._behavior    = _pick_behavior(settings.initial_behavior)
+        self._replanning  = threading.Event()
+        self._llm_ready   = False
+        self._override:   DroneBehavior | None = None  # set by REST /behavior
+        self.patrol_zone: PatrolZone = default_patrol_zone()  # updated after startup
 
     @property
     def behavior(self) -> DroneBehavior:
@@ -134,6 +136,7 @@ class MoveQueue:
                 behavior, state, obstacles,
                 DEFAULT_PLAN_SUMMARY,
                 settings.plan_size,
+                self.patrol_zone,
             )
             self._behavior = plan.behavior
             for m in plan.moves:

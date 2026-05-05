@@ -38,9 +38,6 @@ class Settings:
         default_factory=lambda: _fetch_vault_secret("constructive-airsim-ms", "nvidia.api_key")
     )
     nim_base_url:   str = "https://integrate.api.nvidia.com/v1"
-    # Small free-tier model — fast plan generation. Larger options (kept for reference):
-    #   "abacusai/dracarys-llama-3.1-70b-instruct"  — ~50 s per plan, needs llm_timeout_seconds≥60
-    #   "meta/llama-3.3-70b-instruct"
     nim_model:      str = "google/gemma-3n-e4b-it"
 
     # ── AirSim ────────────────────────────────────────────────────────────────
@@ -55,44 +52,48 @@ class Settings:
     # ── Event Hub gRPC ────────────────────────────────────────────────────────
     event_hub_endpoint: str = "localhost:50051"
 
+    # ── Virtual Areas service (virtual-areas-ms-java) ─────────────────────────
+    virtual_areas_endpoint:  str = "localhost:50052"         # gRPC AreaService
+    virtual_areas_rest_url:  str = "http://localhost:8082"   # REST API
+
     # ── Behavior planning ─────────────────────────────────────────────────────
     initial_behavior:    Optional[DroneBehavior] = None  # None = random each plan
     available_behaviors: list = field(default_factory=lambda: ["patrol"])
-    plan_size:           int   = 60   # request 60 moves; gemma 3n returns ~42 of avg 3 s = ~130 s flight
-    plan_refill_at:      int   = 30   # trigger replan with ~90 s buffer (gemma 3n ~90 s for plan_size=60)
-    behavior_stickiness: float = 1.0  # only one behavior — always stick
+    plan_size:           int   = 60
+    plan_refill_at:      int   = 30
+    behavior_stickiness: float = 1.0
 
     # ── Agent constraints ─────────────────────────────────────────────────────
     cruise_altitude_m:    float = 15.0
     llm_timeout_seconds:  float = 120.0
     max_speed_ms:         float = 12.0
     min_altitude_m:       float = 10.0
-    max_altitude_m:       float = 28.0   # prompt guidance ceiling
+    max_altitude_m:       float = 28.0
     reset_delay_seconds:  float = 3.0
 
     # ── Spatial guardrail (code-enforced, overrides LLM) ─────────────────────
-    max_patrol_radius_m:  float = 400.0  # max 2D distance from NED origin
-    max_altitude_hard_m:  float = 38.0   # hard ceiling — kicks in above LLM target
+    max_patrol_radius_m:  float = 300.0
+    max_altitude_hard_m:  float = 38.0
 
-    # ── Mackenzie area boundary (smaller than patrol radius so enter/exit fires) ─
-    mackenzie_area_id:        str   = "mackenzie_higienopolis"
-    mackenzie_area_radius_m:  float = 200.0  # campus + immediate surroundings
+    # ── Bus stop "Caio Prado C/B" (fallback coords for live-ms-java missions) ─
+    bus_stop_lat:     float = -23.5479
+    bus_stop_lon:     float = -46.6494
+    bus_stop_alt:     float = 780.0
+    bus_hover_alt_m:  float = 30.0    # AGL when hovering for photo or POI visit
+    bus_mission_ttl_s: float = 90.0
+    bus_queue_max:    int   = 3
 
-    # ── Bus stop "Caio Prado C/B" ─────────────────────────────────────────────
-    bus_stop_lat:    float = -23.5479  # adjust once you verify AirSimNH map coords
-    bus_stop_lon:    float = -46.6494
-    bus_stop_alt:    float = 780.0
-    bus_hover_alt_m:  float = 30.0    # AGL when hovering for photo
-    bus_mission_ttl_s: float = 90.0  # seconds before a queued mission is considered stale
-    bus_queue_max:    int   = 3      # max pending missions; new arrivals rejected when full
+    # ── POI missions (triggered by EventHub CHECKIN with MissionTarget) ───────
+    poi_queue_max: int   = 3
+    poi_hover_s:   float = 5.0    # seconds to hover at the POI before returning to patrol
 
-    # ── gRPC server (this service listens here for incoming events) ───────────
-    grpc_server_port: int = 50052
+    # ── gRPC server (inbound — live-ms-java sends bus approach events here) ───
+    grpc_server_port: int = 50053
 
     # ── Service ───────────────────────────────────────────────────────────────
     api_port:  int  = 8081
     drone_id:  str  = "Drone1"
-    test_mode: bool = True   # when True: disables gRPC, prints coords to stdout
+    test_mode: bool = False
 
 
 settings = Settings()

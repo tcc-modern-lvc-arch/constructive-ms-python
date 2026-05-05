@@ -1,6 +1,7 @@
 """FastAPI control endpoints."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import TYPE_CHECKING, Optional
 
@@ -8,12 +9,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from constructive_airsim_ms.config import DroneBehavior, settings
+from constructive_airsim_ms.models import BusMission
 from constructive_airsim_ms.sim.coordinates import ned_to_wgs84
 
 if TYPE_CHECKING:
-    from constructive_airsim_ms.main import AppState, BusMission
+    from constructive_airsim_ms.main import AppState
 
-app = FastAPI(title="Constructive AirSim MS", version="0.2.0")
+app = FastAPI(title="Constructive AirSim MS", version="0.3.0")
 
 _state: AppState | None = None
 
@@ -30,7 +32,7 @@ def _require_state() -> AppState:
 
 
 class BehaviorRequest(BaseModel):
-    behavior: Optional[DroneBehavior] = None  # None = random on next plan
+    behavior: Optional[DroneBehavior] = None
 
 
 @app.get("/health")
@@ -43,25 +45,26 @@ async def health():
 async def status():
     s = _require_state()
     return {
-        "connected":        s.connected,
-        "running":          s.running,
-        "behavior":         s.queue.behavior,
-        "queue_size":       s.queue.size(),
-        "crash_count":      s.crash_count,
-        "llm_ready":        s.queue.llm_ready,
-        "bus_queue_depth":  len(s.bus_queue),
-        "bus_active":       bool(s.bus_queue),
+        "connected":       s.connected,
+        "running":         s.running,
+        "behavior":        s.queue.behavior,
+        "queue_size":      s.queue.size(),
+        "crash_count":     s.crash_count,
+        "llm_ready":       s.queue.llm_ready,
+        "bus_queue_depth": len(s.bus_queue),
+        "bus_active":      bool(s.bus_queue),
+        "poi_queue_depth": len(s.poi_queue),
+        "poi_active":      bool(s.poi_queue),
     }
 
 
 @app.get("/plan")
 async def plan():
-    """Current flight plan state: active behavior, moves remaining, LLM readiness."""
     s = _require_state()
     return {
-        "behavior":       s.queue.behavior,
+        "behavior":        s.queue.behavior,
         "moves_remaining": s.queue.size(),
-        "llm_ready":      s.queue.llm_ready,
+        "llm_ready":       s.queue.llm_ready,
     }
 
 
@@ -86,9 +89,50 @@ async def telemetry():
     }
 
 
+@app.get("/areas")
+async def areas():
+    """Proxy GetActiveAreas from virtual-areas-ms-java. Returns [] when service is down."""
+    s = _require_state()
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: s.virtual_areas_client.get_active_areas("DRONE"),
+    )
+    return result
+
+
+@app.get("/missions")
+async def missions():
+    """Current active and queued missions (bus + POI)."""
+    s = _require_state()
+    import time
+    now = time.monotonic()
+    return {
+        "bus_missions": [
+            {
+                "mission_id": m.mission_id,
+                "bus_id":     m.bus_id,
+                "stop_id":    m.stop_id,
+                "phase":      m.phase,
+                "ttl_s":      round(m.expires_at - now, 1),
+            }
+            for m in s.bus_queue
+        ],
+        "poi_missions": [
+            {
+                "poi_id":   m.poi_id,
+                "poi_name": m.poi_name,
+                "lat":      m.lat,
+                "lon":      m.lon,
+                "phase":    m.phase,
+            }
+            for m in s.poi_queue
+        ],
+    }
+
+
 @app.post("/behavior")
 async def set_behavior(body: BehaviorRequest):
-    """Set behavior for the next plan. behavior=null → random on next replan."""
     s = _require_state()
     if body.behavior is not None:
         s.queue.set_behavior(body.behavior)
@@ -134,7 +178,6 @@ async def simulate_bus_approach(body: BusApproachRequest):
     if len(s.bus_queue) >= settings.bus_queue_max:
         raise HTTPException(429, f"Bus queue full ({settings.bus_queue_max} pending)")
 
-    from constructive_airsim_ms.main import BusMission
     mission_id = str(uuid.uuid4())
     s.bus_queue.append(BusMission(
         bus_id=body.bus_id,
@@ -143,8 +186,8 @@ async def simulate_bus_approach(body: BusApproachRequest):
         expires_at=time.monotonic() + settings.bus_mission_ttl_s,
     ))
     return {
-        "status": "mission_queued",
-        "mission_id": mission_id,
-        "stop": body.stop_name,
+        "status":      "mission_queued",
+        "mission_id":  mission_id,
+        "stop":        body.stop_name,
         "queue_depth": len(s.bus_queue),
     }

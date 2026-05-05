@@ -45,7 +45,7 @@ class DroneControllerServicer(_ServicerBase):
             )
             return bus_event_pb2.BusApproachAck(received=False, mission_id="")
 
-        from constructive_airsim_ms.main import BusMission
+        from constructive_airsim_ms.models import BusMission
         mission = BusMission(
             bus_id=request.bus_id,
             stop_id=request.stop_id,

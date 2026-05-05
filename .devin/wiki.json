@@ -1,0 +1,73 @@
+{
+  "repo_notes": [
+    {
+      "content": "This is a Python microservice (constructive-airsim-ms) for an LVC (Live-Virtual-Constructive) Smart City simulation. An LLM-driven drone flies inside Microsoft AirSim (Unreal Engine, CityEnviron map, Mackenzie Higienópolis campus, São Paulo). The LLM generates full JSON flight plans (~60 moves) via NVIDIA NIM or local Ollama; a code-enforced spatial guardrail overrides the LLM when the drone leaves bounds.\n\nCore source lives in src/constructive_airsim_ms/. The architecture has two parallel execution contexts: (1) AirSimControlThread running a 10 Hz synchronous control loop, and (2) the asyncio main loop hosting FastAPI, LLM calls, and gRPC publishers. They communicate only via asyncio.run_coroutine_threadsafe().\n\nEvent integration: three gRPC publishers (crash, bus photo, area transition) send outbound events to live-ms-java EventHub. One gRPC server receives BusApproachEvent from live-ms-java and enqueues a drone photo mission. All gRPC is suppressed when test_mode=True.\n\nThe agent/ folder is the most novel part: llm_policy.py calls the LLM, move_queue.py is the thread-safe bridge, and prompts.py holds the behavior-specific system prompts with spatial context injection. The proto/ folder defines the three event contracts.",
+      "author": "Rafael Pereira"
+    }
+  ],
+  "pages": [
+    {
+      "title": "Architecture Overview",
+      "purpose": "Document the dual-loop architecture: AirSimControlThread vs asyncio main loop, how they communicate via run_coroutine_threadsafe, and the overall data flow from LLM plan generation to drone movement. Include a component diagram showing main.py, AppState, AirSimControlThread, MoveQueue, LLMPolicy, FastAPI, and the three gRPC publishers."
+    },
+    {
+      "title": "LLM Flight Plan Pipeline",
+      "purpose": "Document how the LLM generates and consumes flight plans: MoveQueue.maybe_replan trigger threshold, LLMPolicy.generate_plan NIM/Ollama call, the system prompt structure in prompts.py, DroneMove JSON schema, _clamp_move safety envelope, fallback to traced_route on timeout or empty plan, and the LLM warmup sequence.",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Control Loop and Priority System",
+      "purpose": "Document the 10 Hz AirSimControlThread._control_loop: priority ordering (bus mission > spatial guardrail > LLM queue > hover), collision detection and reset flow, telemetry printing, and the obstacle polling cadence (every 5 ticks).",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Bus Stop Photo Mission",
+      "purpose": "Document the BusMission state machine (going → arrived → returning → done): how NotifyBusApproach enqueues a mission, how the mission saves and restores the LLM move queue around the flight, the arrival radius check, scene image capture via get_scene_image(), BusPhotoPublisher.publish(), TTL expiry, and the bus_queue_max cap. Reference grpc_server.py, main.py _handle_bus_mission, and bus_photo_publisher.py.",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Spatial Guardrail",
+      "purpose": "Document the code-enforced spatial safety system: max_altitude_hard_m (38 m) triggers a 4 m/s descent override, max_patrol_radius_m (400 m) triggers a return-to-origin velocity override, and how both suppress the LLM queue without resetting it. Contrast with the LLM's own softer patrol_radius prompt guidance (80% warn threshold).",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Coordinate System",
+      "purpose": "Document the AirSim NED coordinate system with Mackenzie Higienópolis as origin (lat=-23.5467, lon=-46.6519, alt=780m), the ned_to_wgs84 / wgs84_to_ned functions using pymap3d, the vz sign inversion (DroneMove.vz positive=up, AirSim NED z positive=down), and how wgs84_to_ned is used to pre-compute the bus stop NED target in AirSimControlThread.__init__.",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "gRPC Event Pipeline",
+      "purpose": "Document all three outbound event publishers (CrashPublisher, BusPhotoPublisher, AreaPublisher) and the inbound gRPC server (DroneControllerServicer). For each: the proto service and message definitions in proto/, the stub import with graceful degradation on ImportError, the publish() method signature and test_mode suppression, and the EventHub endpoint (localhost:50051 outbound, port 50052 inbound)."
+    },
+    {
+      "title": "Protobuf Contracts",
+      "purpose": "Document the three .proto files: crash_event.proto (CrashEvent/CrashAck via EventHub), bus_event.proto (BusApproachEvent/Ack via DroneController inbound + BusPhotoEvent/Ack via BusEventHub outbound), area_event.proto (AreaTransitionEvent/Ack via AreaEventHub). Note the dual-service pattern in bus_event.proto and how to regenerate stubs with python scripts/gen_proto.py.",
+      "parent": "gRPC Event Pipeline"
+    },
+    {
+      "title": "Area Boundary Monitoring",
+      "purpose": "Document the Mackenzie area enter/exit detection: mackenzie_area_radius_m (200 m), 5 m hysteresis band (exit at >205 m, enter at <195 m), AppState.inside_area flag, _publish_area_transition helper, and AreaPublisher. Run every control tick including during bus missions.",
+      "parent": "gRPC Event Pipeline"
+    },
+    {
+      "title": "REST API",
+      "purpose": "Document all FastAPI endpoints in api/rest.py: GET /health, /status, /telemetry, /plan; POST /behavior (immediate replan on override), /start, /stop, /reset, /simulate-bus-approach (testing shortcut). Include request/response shapes and the AppState attachment pattern via attach_state()."
+    },
+    {
+      "title": "Configuration and Secrets",
+      "purpose": "Document the Settings dataclass in config.py: all parameters with defaults and purpose, the Vault KV v2 secret fetch (_fetch_vault_secret), environment variable fallback pattern, and the DroneBehavior enum. Highlight test_mode (suppresses gRPC), use_ollama toggle, and key tuning parameters (plan_size, plan_refill_at, guardrail limits, bus TTL)."
+    },
+    {
+      "title": "Bootstrap Route and Fallback",
+      "purpose": "Document agent/route.py: the traced_route() pre-scripted 43-move bootstrap sequence (ascend 48m AGL → N→E→S→W 80m square → hold), its role as LLM warmup cover, and how it is also used as the fallback plan when LLM returns empty or fails. Document the DEFAULT_PLAN_SUMMARY string injected into every LLM system prompt."
+    },
+    {
+      "title": "AirSim Client Wrapper",
+      "purpose": "Document sim/client.py DroneClient: connection retry logic with _port_ready check, takeoff/reset sequence, move_by_velocity (vz negation for NED), move_to_position (non-blocking, NED), get_scene_image (PNG bytes from front_center Scene camera), get_images (depth perspective), and hover. Emphasize that this class must only be called from AirSimControlThread."
+    },
+    {
+      "title": "Development Setup",
+      "purpose": "Document how to run the service: prerequisites (AirSim CityEnviron running, Python 3.11, dependencies), stub generation with scripts/gen_proto.py, secrets via Vault or NVIDIA_API_KEY env var, Ollama alternative (use_ollama=True), and the startup sequence (connect → takeoff → preload route → LLM warmup → control loop). Note the Windows-specific WindowsSelectorEventLoopPolicy."
+    }
+  ]
+}
