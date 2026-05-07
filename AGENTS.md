@@ -38,15 +38,10 @@ src/constructive_airsim_ms/
     bus_photo_publisher.py  # gRPC client → BusEventHub.PublishBusPhoto
     area_publisher.py       # gRPC client → AreaEventHub.PublishAreaTransition
 
-  generated/            # protobuf stubs (run: python scripts/gen_proto.py)
-
-proto/
-  crash_event.proto
-  bus_event.proto
-  area_event.proto
+  generated/            # protobuf stubs — synced from ../proto-shared (run: python scripts/gen_proto.py)
 
 scripts/
-  gen_proto.py          # regenerates src/…/generated/ from proto/
+  gen_proto.py          # syncs stubs from ../proto-shared/target/.../python/
 ```
 
 ---
@@ -182,8 +177,9 @@ Key tuning parameters:
 ## How to Run
 
 ```bash
-# 1. Generate protobuf stubs
-python scripts/gen_proto.py
+# 1. Generate protobuf stubs (from proto-shared single source of truth)
+cd ../proto-shared && mvn clean install -DskipTests
+cd ../constructive-airsim-ms-python && python scripts/gen_proto.py
 
 # 2. Start AirSim (CityEnviron map)
 
@@ -201,7 +197,7 @@ bootstrap route, warms the LLM, then hands control to the LLM plan loop.
 
 ## Common Gotchas
 
-- **Stubs missing**: run `python scripts/gen_proto.py` — publishers degrade gracefully but log warnings.
+- **Stubs missing**: run `mvn install -DskipTests` in `../proto-shared`, then `python scripts/gen_proto.py` — publishers degrade gracefully but log warnings.
 - **Windows event loop**: `WindowsSelectorEventLoopPolicy` is set automatically on win32.
 - **tornado/msgpackrpc conflict**: AirSim's Python client uses tornado internally; it runs in
   `AirSimControlThread` with its own event loop precisely to avoid conflicting with FastAPI's uvicorn loop.
