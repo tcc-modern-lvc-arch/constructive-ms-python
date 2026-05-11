@@ -47,7 +47,7 @@ class EventHubPublisher:
         # For MOVE/CRASH events without an area context, fall back to entity_id.
         return dict(
             area_id=area_id if area_id else settings.drone_id,
-            source="constructive-airsim-ms",
+            source="constructive-ms-python",
             event_kind=kind,
             entity_type=event_pb2.DRONE,
             lvc=event_pb2.CONSTRUCTIVE,
@@ -111,6 +111,7 @@ class EventHubPublisher:
         lon:        float,
         alt:        float,
         speed_ms:   float,
+        mission_id: str | None = None,
     ) -> None:
         """PHOTO event — emitted after bus-stop photo mission; image_jpeg contains PNG bytes
         (AirSim returns PNG; field name reflects the expected format but bytes are PNG)."""
@@ -123,7 +124,12 @@ class EventHubPublisher:
         if not _STUBS_AVAILABLE:
             return
         loc     = event_pb2.Location(lat=lat, lon=lon, altitude_m=alt)
-        payload = event_pb2.DronePayload(location=loc, speed_ms=speed_ms, picture_jpeg=image_jpeg)
+        payload = event_pb2.DronePayload(
+            location=loc,
+            speed_ms=speed_ms,
+            picture_jpeg=image_jpeg,
+            mission_id=mission_id,
+        )
         req     = event_pb2.EventRequest(
             **self._base_kwargs(event_pb2.PHOTO, area_id=stop_id),
             drone=payload,

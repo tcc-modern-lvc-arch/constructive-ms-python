@@ -252,6 +252,7 @@ class AirSimControlThread(threading.Thread):
                     lon=lon,
                     alt=alt,
                     speed_ms=speed,
+                    mission_id=mission.mission_id,
                 ),
                 self._state.asyncio_loop,
             )
